@@ -1,4 +1,4 @@
-# PaveCraft — Paving Block Production & Sales Manager
+# PaveCraft — Paving Block Production & Sales    Manager
 
 A web app for managing paving block production output and sales. Track production by cement bags or units, manage inventory across multiple block designs and colors, and record daily sales.
 
