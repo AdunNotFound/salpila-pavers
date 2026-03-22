@@ -42,6 +42,8 @@ async function initDb() {
   db.run(`CREATE TABLE IF NOT EXISTS colors (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, sort_order INTEGER DEFAULT 0)`);
   db.run(`CREATE TABLE IF NOT EXISTS production (id TEXT PRIMARY KEY, design_id TEXT NOT NULL, color TEXT NOT NULL, bags REAL DEFAULT 0, units INTEGER NOT NULL, date TEXT NOT NULL, notes TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now')))`);
   db.run(`CREATE TABLE IF NOT EXISTS sales (id TEXT PRIMARY KEY, design_id TEXT NOT NULL, color TEXT NOT NULL, units INTEGER NOT NULL, customer TEXT DEFAULT '', date TEXT NOT NULL, notes TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now')))`);
+  db.run(`CREATE TABLE IF NOT EXISTS locations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, sort_order INTEGER DEFAULT 0)`);
+  db.run(`CREATE TABLE IF NOT EXISTS prices (id INTEGER PRIMARY KEY AUTOINCREMENT, design_id TEXT NOT NULL, color TEXT NOT NULL, location TEXT NOT NULL, price REAL DEFAULT 0, UNIQUE(design_id, color, location))`);
 
   const dc = db.exec("SELECT COUNT(*) FROM designs")[0]?.values[0][0] || 0;
   if (dc === 0) {
@@ -52,6 +54,10 @@ async function initDb() {
   const cc = db.exec("SELECT COUNT(*) FROM colors")[0]?.values[0][0] || 0;
   if (cc === 0) {
     ['Red','Black','Ash','White'].forEach((c,i) => db.run('INSERT INTO colors (name,sort_order) VALUES (?,?)', [c,i]));
+  }
+  const lc = db.exec("SELECT COUNT(*) FROM locations")[0]?.values[0][0] || 0;
+  if (lc === 0) {
+    ['Kalutara','Colombo'].forEach((l,i) => db.run('INSERT INTO locations (name,sort_order) VALUES (?,?)', [l,i]));
   }
   saveDb();
 }
@@ -103,6 +109,7 @@ app.put('/api/designs/:id', (req, res) => {
 
 app.delete('/api/designs/:id', (req, res) => {
   run('DELETE FROM designs WHERE id = ?', [req.params.id]);
+  run('DELETE FROM prices WHERE design_id = ?', [req.params.id]);
   res.json({ success: true });
 });
 
@@ -123,6 +130,65 @@ app.post('/api/colors', (req, res) => {
 
 app.delete('/api/colors/:name', (req, res) => {
   run('DELETE FROM colors WHERE name = ?', [req.params.name]);
+  run('DELETE FROM prices WHERE color = ?', [req.params.name]);
+  res.json({ success: true });
+});
+
+// ─── Locations ───
+app.get('/api/locations', (req, res) => {
+  res.json(queryAll('SELECT name FROM locations ORDER BY sort_order, id').map(r => r.name));
+});
+
+app.post('/api/locations', (req, res) => {
+  const { name } = req.body;
+  if (!name) return res.status(400).json({ error: 'Name required' });
+  try {
+    const m = queryOne('SELECT MAX(sort_order) as m FROM locations')?.m || 0;
+    run('INSERT INTO locations (name, sort_order) VALUES (?, ?)', [name, m + 1]);
+    res.json({ success: true });
+  } catch { res.status(400).json({ error: 'Location already exists' }); }
+});
+
+app.delete('/api/locations/:name', (req, res) => {
+  run('DELETE FROM locations WHERE name = ?', [req.params.name]);
+  run('DELETE FROM prices WHERE location = ?', [req.params.name]);
+  res.json({ success: true });
+});
+
+// ─── Prices ───
+app.get('/api/prices', (req, res) => {
+  const rows = queryAll('SELECT p.*, d.name as design_name FROM prices p LEFT JOIN designs d ON p.design_id = d.id ORDER BY d.name, p.color, p.location');
+  res.json(rows.map(r => ({
+    id: r.id, designId: r.design_id, designName: r.design_name,
+    color: r.color, location: r.location, price: r.price,
+  })));
+});
+
+app.post('/api/prices', (req, res) => {
+  const { designId, color, location, price } = req.body;
+  if (!designId || !color || !location || price === undefined) return res.status(400).json({ error: 'Missing fields' });
+  // Upsert
+  const existing = queryOne('SELECT id FROM prices WHERE design_id=? AND color=? AND location=?', [designId, color, location]);
+  if (existing) {
+    run('UPDATE prices SET price=? WHERE id=?', [price, existing.id]);
+  } else {
+    run('INSERT INTO prices (design_id, color, location, price) VALUES (?,?,?,?)', [designId, color, location, price]);
+  }
+  res.json({ success: true });
+});
+
+app.post('/api/prices/bulk', (req, res) => {
+  const { prices } = req.body; // array of {designId, color, location, price}
+  if (!prices || !Array.isArray(prices)) return res.status(400).json({ error: 'prices array required' });
+  for (const p of prices) {
+    const existing = queryOne('SELECT id FROM prices WHERE design_id=? AND color=? AND location=?', [p.designId, p.color, p.location]);
+    if (existing) {
+      db.run('UPDATE prices SET price=? WHERE id=?', [p.price, existing.id]);
+    } else {
+      db.run('INSERT INTO prices (design_id, color, location, price) VALUES (?,?,?,?)', [p.designId, p.color, p.location, p.price]);
+    }
+  }
+  saveDb();
   res.json({ success: true });
 });
 
@@ -207,7 +273,7 @@ app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.ht
 
 initDb().then(() => {
   app.listen(PORT, () => {
-    console.log(`\n  PaveCraft running on port ${PORT}\n`);
+    console.log(`\n  Salpila Pavers running on port ${PORT}\n`);
   });
 }).catch(err => { console.error('DB init failed:', err); process.exit(1); });
 
